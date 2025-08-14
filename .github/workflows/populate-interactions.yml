@@ -1,0 +1,114 @@
+name: Populate Drug Interactions Database
+
+on:
+  workflow_dispatch:
+    inputs:
+      drug_name:
+        description: 'Specific drug to check interactions for (optional)'
+        required: false
+        type: string
+      force_update:
+        description: 'Force update existing interactions'
+        required: false
+        type: boolean
+        default: false
+  schedule:
+    # Run monthly on the first day at 2 AM UTC
+    - cron: '0 2 1 * *'
+
+env:
+  PGHOST: db.doc.ic.ac.uk
+  PGPORT: 5432
+  PGDATABASE: mkn123
+  PGUSER: mkn123
+  PGPASSWORD: 08J+61hap7
+
+jobs:
+  populate-interactions:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        
+    - name: Install Node.js dependencies
+      run: |
+        npm install
+        cd scripts
+        npm install
+        cd ../api
+        npm install
+        
+    - name: Make populate script executable
+      run: |
+        chmod +x scripts/populate-interactions-database.js
+        
+    - name: Run population script (specific drug)
+      if: ${{ github.event.inputs.drug_name != '' }}
+      run: |
+        cd scripts
+        node populate-interactions-database.js --drug=${{ github.event.inputs.drug_name }}
+        
+    - name: Run population script (full database)
+      if: ${{ github.event.inputs.drug_name == '' }}
+      run: |
+        cd scripts  
+        node populate-interactions-database.js ${{ github.event.inputs.force_update == 'true' && '--force' || '' }}
+        
+    - name: Generate summary report
+      run: |
+        cd api
+        node -e "
+        import pkg from 'pg';
+        import dotenv from 'dotenv';
+        dotenv.config();
+        
+        const { Pool } = pkg;
+        const pool = new Pool({
+          host: process.env.PGHOST,
+          port: process.env.PGPORT,
+          database: process.env.PGDATABASE,
+          user: process.env.PGUSER,
+          password: process.env.PGPASSWORD,
+          ssl: { rejectUnauthorized: false },
+        });
+        
+        pool.query(\`
+          SELECT 
+            COUNT(*) as total_interactions,
+            COUNT(CASE WHEN severity = 'strong' THEN 1 END) as strong_interactions,
+            COUNT(CASE WHEN severity = 'mild' THEN 1 END) as mild_interactions,
+            COUNT(CASE WHEN severity = 'none' THEN 1 END) as no_interactions,
+            COUNT(CASE WHEN last_updated > NOW() - INTERVAL '1 day' THEN 1 END) as updated_today
+          FROM drug_interactions
+        \`).then(result => {
+          const stats = result.rows[0];
+          console.log('## Database Population Summary');
+          console.log('| Metric | Count |');
+          console.log('|--------|--------|');
+          console.log(\`| Total Interactions | \${stats.total_interactions} |\`);
+          console.log(\`| Strong Interactions | \${stats.strong_interactions} |\`);
+          console.log(\`| Mild Interactions | \${stats.mild_interactions} |\`);
+          console.log(\`| No Interactions | \${stats.no_interactions} |\`);
+          console.log(\`| Updated Today | \${stats.updated_today} |\`);
+          pool.end();
+        }).catch(console.error);
+        " > interaction_summary.md
+        
+    - name: Upload summary as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: interaction-summary
+        path: api/interaction_summary.md
+        
+    - name: Comment summary on manual run
+      if: github.event_name == 'workflow_dispatch'
+      run: |
+        echo "Drug interaction database population completed successfully!" >> $GITHUB_STEP_SUMMARY
+        cat api/interaction_summary.md >> $GITHUB_STEP_SUMMARY

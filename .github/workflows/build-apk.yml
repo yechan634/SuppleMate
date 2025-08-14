@@ -1,0 +1,72 @@
+name: Build Android App
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup EAS CLI
+        run: npm install -g eas-cli
+
+      - name: Build Android APK
+        run: |
+          EXPO_TOKEN=o79ne_48TrpyM1743bAztUEPeSex7ihkZOVKkGAD eas build --platform android --local --non-interactive
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        id: upload-artifact
+        with:
+          name: android-apk
+          path: '*.apk'
+          retention-days: 7
+
+      - name: Record build artifact in database
+        if: steps.upload-artifact.outputs.artifact-id
+        run: |
+          # Construct the artifact download URL
+          ARTIFACT_ID="${{ steps.upload-artifact.outputs.artifact-id }}"
+          ARTIFACT_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts/${ARTIFACT_ID}"
+          
+          # API base URL
+          API_BASE_URL="https://supplemate-api2.impaas.uk"
+          
+          echo "Recording artifact in database..."
+          echo "Artifact ID: ${ARTIFACT_ID}"
+          echo "Artifact URL: ${ARTIFACT_URL}"
+          
+          # Record the artifact in the database
+          curl -X POST "${API_BASE_URL}/artifacts" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"platform\": \"android\",
+              \"download_url\": \"${ARTIFACT_URL}\",
+              \"build_commit_hash\": \"${{ github.sha }}\"
+            }" \
+            --fail \
+            --show-error \
+            --silent && echo "✅ Artifact successfully recorded in database!" || echo "⚠️ Warning: Failed to record artifact in database"

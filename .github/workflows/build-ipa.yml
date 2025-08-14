@@ -1,0 +1,108 @@
+name: Build iOS App
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 16.2
+        run: sudo xcode-select -s /Applications/Xcode_16.2.app
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup EAS CLI
+        run: npm install -g eas-cli
+
+      - name: Authenticate with Expo
+        run: |
+          echo "Authenticating with Expo..."
+          eas whoami || echo "Not logged in yet"
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Build iOS IPA
+        run: |
+          echo "Building iOS app with EAS..."
+          eas build --platform ios --profile ci --local --non-interactive
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Package .app into .ipa
+        id: package-ipa
+        run: |
+          echo "Looking for build tarball..."
+          TARBALL=$(find . -name "*.tar.gz" -type f | head -1)
+
+          if [ -z "$TARBALL" ]; then
+            echo "❌ No build tarball found"
+            exit 1
+          fi
+
+          echo "✅ Found tarball: $TARBALL"
+
+          mkdir -p extracted/Payload
+          tar -xzf "$TARBALL" -C extracted/Payload
+
+          APP_PATH=$(find extracted/Payload -name "*.app" -type d | head -1)
+          if [ -z "$APP_PATH" ]; then
+            echo "❌ No .app found in tarball"
+            exit 1
+          fi
+
+          echo "✅ Found .app: $APP_PATH"
+
+          # Create IPA
+          cd extracted
+          zip -r supplemate.ipa Payload
+          cd ..
+
+          echo "ipa_path=extracted/supplemate.ipa" >> $GITHUB_OUTPUT
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        id: upload-artifact
+        with:
+          name: ios-ipa
+          path: ${{ steps.package-ipa.outputs.ipa_path }}
+          retention-days: 7
+
+      - name: Record build artifact in database
+        if: steps.upload-artifact.outputs.artifact-id
+        run: |
+          # Construct the artifact download URL
+          ARTIFACT_ID="${{ steps.upload-artifact.outputs.artifact-id }}"
+          ARTIFACT_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts/${ARTIFACT_ID}"
+          
+          # API base URL
+          API_BASE_URL="https://supplemate-api2.impaas.uk"
+          
+          echo "Recording iOS artifact in database..."
+          echo "Artifact ID: ${ARTIFACT_ID}"
+          echo "Artifact URL: ${ARTIFACT_URL}"
+          
+          # Record the artifact in the database
+          curl -X POST "${API_BASE_URL}/artifacts" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"platform\": \"ios\",
+              \"download_url\": \"${ARTIFACT_URL}\",
+              \"build_commit_hash\": \"${{ github.sha }}\"
+            }" \
+            --fail \
+            --show-error \
+            --silent && echo "✅ iOS artifact successfully recorded in database!" || echo "⚠️ Warning: Failed to record iOS artifact in database"

@@ -1,0 +1,42 @@
+name: Compile Web App
+
+on:
+  push:
+    branches: 
+        - '**'
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Install Expo CLI
+        run: npm install -g @expo/cli
+
+      - name: Export web build
+        run: npx expo export --platform web
+
+      - name: Verify build output
+        run: |
+          ls -la dist/
+          test -f dist/index.html
+          test -d dist/_expo
+
+      - name: Upload web build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: dist/
+          retention-days: 7

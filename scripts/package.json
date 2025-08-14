@@ -1,0 +1,16 @@
+{
+  "name": "supplemate-scripts",
+  "version": "1.0.0",
+  "description": "Utility scripts for SuppleMate application",
+  "type": "module",
+  "scripts": {
+    "populate-interactions": "cd ../api && node ../scripts/populate-interactions-database.js",
+    "test-api": "node test-database-only-api.js",
+    "populate-single": "cd ../api && node ../scripts/populate-interactions-database.js --drug="
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "dotenv": "^16.3.0",
+    "pg": "^8.11.0"
+  }
+}

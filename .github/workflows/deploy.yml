@@ -1,0 +1,162 @@
+name: Deploy API to Impaas
+
+on:
+  workflow_run:
+    workflows: ["Test API"]
+    types:
+      - completed
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy-api:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download latest build artifacts (if requested or on push)
+        if: ${{ github.event_name == 'push' || github.event.inputs.download_artifacts == 'true' }}
+        run: |
+          echo "Attempting to download latest build artifacts..."
+          
+          # Get the latest successful workflow runs for each build type
+          EAS_ANDROID_RUN_ID=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/build-apk.yml/runs?status=success&per_page=1" \
+            | jq -r '.workflow_runs[0].id // empty')
+          
+          LOCAL_ANDROID_RUN_ID=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/build-apk-local.yml/runs?status=success&per_page=1" \
+            | jq -r '.workflow_runs[0].id // empty')
+          
+          IOS_RUN_ID=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/build-ipa.yml/runs?status=success&per_page=1" \
+            | jq -r '.workflow_runs[0].id // empty')
+          
+          # Download EAS Android build artifact if available
+          if [ -n "$EAS_ANDROID_RUN_ID" ] && [ "$EAS_ANDROID_RUN_ID" != "null" ]; then
+            echo "Downloading EAS Android build artifact from run $EAS_ANDROID_RUN_ID"
+            gh run download $EAS_ANDROID_RUN_ID --name android-apk --dir ./artifacts || echo "Failed to download EAS Android artifact"
+          fi
+          
+          # Download local Android build artifact if available
+          if [ -n "$LOCAL_ANDROID_RUN_ID" ] && [ "$LOCAL_ANDROID_RUN_ID" != "null" ]; then
+            echo "Downloading local Android build artifact from run $LOCAL_ANDROID_RUN_ID"
+            gh run download $LOCAL_ANDROID_RUN_ID --name android-apk-local --dir ./artifacts-local || echo "Failed to download local Android artifact"
+          fi
+          
+          # Download iOS build artifact if available
+          if [ -n "$IOS_RUN_ID" ] && [ "$IOS_RUN_ID" != "null" ]; then
+            echo "Downloading iOS build artifact from run $IOS_RUN_ID"
+            gh run download $IOS_RUN_ID --name ios-ipa --dir ./artifacts-ios || echo "Failed to download iOS artifact"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare API deployment
+        id: prepare
+        run: |
+          # Create api/public directory
+          mkdir -p api/public
+          
+          # Copy APK to API public folder if it exists (try EAS build first, then local build)
+          APK_COPIED=false
+          
+          if [ -d "./artifacts" ]; then
+            APK_FILE=$(find ./artifacts -name "*.apk" -type f | head -1)
+            if [ -n "$APK_FILE" ]; then
+              cp "$APK_FILE" api/public/supplemate-latest.apk
+              echo "EAS APK copied to api/public/supplemate-latest.apk"
+              ls -la api/public/
+              APK_COPIED=true
+            fi
+          fi
+          
+          if [ "$APK_COPIED" = "false" ] && [ -d "./artifacts-local" ]; then
+            APK_FILE=$(find ./artifacts-local -name "*.apk" -type f | head -1)
+            if [ -n "$APK_FILE" ]; then
+              cp "$APK_FILE" api/public/supplemate-latest.apk
+              echo "Local APK copied to api/public/supplemate-latest.apk"
+              ls -la api/public/
+              APK_COPIED=true
+            fi
+          fi
+          
+          if [ "$APK_COPIED" = "false" ]; then
+            echo "No APK file found in any artifacts"
+            echo "Manual deployment - deploying API without new APK"
+            # Check if there's already an APK in the public folder
+            if [ -f "api/public/supplemate-latest.apk" ]; then
+              echo "Existing APK found in api/public/ - will keep it"
+            fi
+          fi
+          
+          # Copy IPA to API public folder if it exists
+          IPA_COPIED=false
+          
+          if [ -d "./artifacts-ios" ]; then
+            IPA_FILE=$(find ./artifacts-ios -name "*.ipa" -type f | head -1)
+            if [ -n "$IPA_FILE" ]; then
+              cp "$IPA_FILE" api/public/supplemate-latest.ipa
+              echo "IPA copied to api/public/supplemate-latest.ipa"
+              ls -la api/public/
+              IPA_COPIED=true
+            fi
+          fi
+          
+          if [ "$IPA_COPIED" = "false" ]; then
+            echo "No IPA file found in artifacts"
+            echo "Manual deployment - deploying API without new IPA"
+            # Check if there's already an IPA in the public folder
+            if [ -f "api/public/supplemate-latest.ipa" ]; then
+              echo "Existing IPA found in api/public/ - will keep it"
+            fi
+          fi
+          
+          # Remove package-lock.json to avoid local tarball references
+          rm -f api/package-lock.json
+          
+          # Set output for next step
+          echo "apk_copied=$APK_COPIED" >> $GITHUB_OUTPUT
+          echo "ipa_copied=$IPA_COPIED" >> $GITHUB_OUTPUT
+
+      - name: Install Tsuru CLI
+        run: |
+          curl -fsSL https://tsuru.io/get | bash
+          export PATH=$PATH:/tmp/tsuru
+          echo "/tmp/tsuru" >> $GITHUB_PATH
+
+      - name: Configure Tsuru
+        run: |
+          tsuru target-add default https://impaas.uk -s
+        env:
+          TSURU_TOKEN: ${{ secrets.TSURU_TOKEN }}
+
+      - name: Deploy API to Impaas
+        run: |
+          tsuru user info
+          tsuru app deploy -a supplemate-api2 ./api
+        env:
+          TSURU_TOKEN: ${{ secrets.TSURU_TOKEN }}
+
+      - name: Verify deployment
+        run: |
+          echo "Deployment completed!"
+          echo "Checking API status..."
+          
+          # Wait a moment for deployment to complete
+          sleep 10
+          
+          # Check if the API is responding
+          API_BASE_URL="https://supplemate-api2.impaas.uk"
+          curl -s "${API_BASE_URL}/" && echo "✅ API is responding!" || echo "⚠️ API may not be fully deployed yet"
+          
+          # Check latest artifacts in database
+          curl -s "${API_BASE_URL}/artifacts/latest/android" && echo "✅ Latest Android artifact found in database!" || echo "ℹ️ No Android artifacts found in database yet"
+          curl -s "${API_BASE_URL}/artifacts/latest/ios" && echo "✅ Latest iOS artifact found in database!" || echo "ℹ️ No iOS artifacts found in database yet"
+          
+          # Check if APK is available for direct download
+          curl -I -s "${API_BASE_URL}/public/supplemate-latest.apk" | head -1 | grep -q "200" && echo "✅ APK file is available for direct download!" || echo "ℹ️ No APK file available for direct download"

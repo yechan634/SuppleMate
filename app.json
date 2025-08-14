@@ -1,0 +1,29 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "1ef8d61a-46c4-41ed-9584-deda6de12f77"
+      }
+    },
+    "owner": "erengeridonmez",
+    "ios": {
+      "bundleIdentifier": "com.supplemate.app",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "18.0"
+          }
+        }
+      ]
+    ],
+    "android": {
+      "package": "com.supplemate.app"
+    }
+  }
+}

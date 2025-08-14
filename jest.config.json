@@ -1,0 +1,29 @@
+{
+    "preset": "jest-expo/node",
+    "testEnvironment": "node",
+    "transform": {
+        "^.+\\.(js|jsx|ts|tsx)$": "babel-jest"
+    },
+    "moduleFileExtensions": ["ts", "tsx", "js", "jsx"],
+    "testPathIgnorePatterns": [
+        "<rootDir>/node_modules/",
+        "<rootDir>/api/"
+    ],
+    "testMatch": [
+        "<rootDir>/**/__tests__/**/*.(js|jsx|ts|tsx)",
+        "<rootDir>/**/*.(test|spec).(js|jsx|ts|tsx)"
+    ],
+    "collectCoverageFrom": [
+        "app/**/*.{js,ts,tsx}",
+        "components/**/*.{js,ts,tsx}",
+        "constants/**/*.{js,ts,tsx}",
+        "!**/*.d.ts",
+        "!**/node_modules/**",
+        "!**/api/**"
+    ],
+    "coverageReporters": [
+        "text",
+        "lcov",
+        "html"
+    ]
+}
